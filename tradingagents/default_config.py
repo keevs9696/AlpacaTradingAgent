@@ -37,9 +37,9 @@ DEFAULT_CONFIG = {
         ),
     ),
     # LLM settings
-    "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
-    "deep_think_llm": "gpt-5.4-mini",
-    "quick_think_llm": "gpt-5.4-nano",
+    "llm_provider": os.getenv("LLM_PROVIDER", "openrouter"),
+    "deep_think_llm": "anthropic/claude-haiku-5.5",
+    "quick_think_llm": "deepseek/deepseek-v4.1-flash-1017",
     "backend_url": None,
     "google_thinking_level": None,
     "openai_reasoning_effort": None,
@@ -181,7 +181,9 @@ DEFAULT_CONFIG = {
     "openai_api_key": None,
     "openai_use_local": False,  # Route core LLM calls to a local OpenAI-compatible endpoint
     "openai_base_url": None,  # Example: http://localhost:1234/v1
-    "openai_embedding_model": "text-embedding-ada-002",
+    "openai_embedding_model": os.getenv(
+        "OPENAI_EMBEDDING_MODEL", "text-embedding-ada-002"
+    ),
     "minimax_api_key": None,
     "finnhub_api_key": None,
     "alpaca_api_key": None,

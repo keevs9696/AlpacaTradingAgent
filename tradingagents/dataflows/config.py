@@ -116,13 +116,24 @@ def get_openai_embedding_model() -> str:
 
 def get_openai_client_config() -> Dict[str, str]:
     """
-    Build OpenAI SDK client kwargs.
+    Build OpenAI SDK client kwargs for reflection-memory embeddings.
 
-    Local mode only applies to generic chat/embedding clients. OpenAI web-search
-    tools should keep their existing cloud-only behavior unless explicitly
-    reworked, because most local OpenAI-compatible servers do not support
-    `responses.create(..., tools=[{"type": "web_search"}])`.
+    An embedding-specific endpoint can be configured independently from chat
+    and web-search clients. OpenRouter uses the existing runtime/env OpenRouter
+    key when that endpoint is selected.
     """
+    embedding_base_url = os.getenv("OPENAI_EMBEDDING_BASE_URL")
+    if embedding_base_url:
+        api_key = os.getenv("OPENAI_EMBEDDING_API_KEY")
+        if not api_key:
+            if "openrouter.ai" in embedding_base_url.lower():
+                api_key = get_openrouter_api_key()
+            else:
+                api_key = get_openai_api_key()
+        if api_key:
+            return {"base_url": embedding_base_url, "api_key": api_key}
+        return {}
+
     api_key = get_openai_api_key()
     use_local = is_local_openai_enabled()
     base_url = get_openai_base_url()

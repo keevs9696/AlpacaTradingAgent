@@ -66,86 +66,65 @@ class StockstatsUtils:
 
             try:
                 if os.path.exists(data_file):
-                    # Load cached data
+                    # Import old CSVs into SQLite, retaining the CSV's age so
+                    # recent bars are refreshed when the configured TTL expires.
                     try:
-                        data = pd.read_csv(data_file, encoding="utf-8")
+                        legacy_data = pd.read_csv(data_file, encoding="utf-8")
                     except Exception as csv_error:
                         return f"N/A: Malformed cached indicator data for {symbol}: {csv_error}"
                     required_raw_cols = {"Date", "Open", "High", "Low", "Close", "Volume"}
-                    if not required_raw_cols.intersection(data.columns):
+                    if not required_raw_cols.issubset(legacy_data.columns):
                         return f"N/A: Malformed cached indicator data for {symbol}: missing OHLCV columns"
-                    if 'Date' in data.columns:
-                        data["Date"] = pd.to_datetime(data["Date"])
-
-                    # Ensure lowercase aliases exist for cached data too
-                    required_cols_map = {
-                        'Open': 'open',
-                        'High': 'high',
-                        'Low': 'low',
-                        'Close': 'close',
-                        'Volume': 'volume'
-                    }
-                    for cap, low in required_cols_map.items():
-                        if cap in data.columns and low not in data.columns:
-                            data[low] = data[cap]
-                else:
-                    # Fetch fresh data from Alpaca
-                    data = AlpacaUtils.get_stock_data(
-                        symbol=symbol,  # Use original symbol for API call
-                        start_date=start_date_str,
-                        end_date=end_date_str,
-                        timeframe="1Day"
+                    AlpacaUtils.seed_stock_data_cache(
+                        symbol,
+                        legacy_data,
+                        start_date_str,
+                        end_date_str,
+                        timeframe="1Day",
+                        fetched_at=os.path.getmtime(data_file),
                     )
 
-                    # Ensure we have data
-                    if data.empty:
-                        return f"N/A: No data available for {symbol}"
+                # SQLite is the shared source of truth. It returns cached
+                # history and only requests gaps or a stale recent tail.
+                data = AlpacaUtils.get_stock_data(
+                    symbol=symbol,
+                    start_date=start_date_str,
+                    end_date=end_date_str,
+                    timeframe="1Day",
+                )
+                if data.empty:
+                    return f"N/A: No data available for {symbol}"
 
-                    # Clean data and handle duplicates to prevent reindex errors
-                    data = data.dropna()
-                    if 'date' in data.columns:
-                        data = data.drop_duplicates(subset=['date'])
-                    data = data.reset_index(drop=True)
+                data = data.dropna(subset=[column for column in ("close", "Close") if column in data.columns])
+                if "timestamp" in data.columns:
+                    data = data.rename(
+                        columns={
+                            "timestamp": "Date",
+                            "open": "Open",
+                            "high": "High",
+                            "low": "Low",
+                            "close": "Close",
+                            "volume": "Volume",
+                        }
+                    )
 
-                    # Standardize column names for stockstats
-                    if 'timestamp' in data.columns:
-                        data = data.rename(columns={
-                            'timestamp': 'Date',
-                            'open': 'Open',
-                            'high': 'High',
-                            'low': 'Low',
-                            'close': 'Close',
-                            'volume': 'Volume'
-                        })
-
-                    # -----------------------------------------------------------------
-                    # Ensure lowercase aliases exist for Stockstats calculations.
-                    # Stockstats expects lowercase column names like 'close' and 'volume'.
-                    # When we rename to capitalized versions for display purposes, the
-                    # original lowercase columns disappear, causing certain indicators
-                    # (e.g., OBV that relies on 'volume') to return NaN. We therefore
-                    # create lowercase duplicates without altering existing display columns.
-                    # -----------------------------------------------------------------
-                    required_cols_map = {
-                        'Open': 'open',
-                        'High': 'high',
-                        'Low': 'low',
-                        'Close': 'close',
-                        'Volume': 'volume'
-                    }
-                    for cap, low in required_cols_map.items():
-                        if cap in data.columns and low not in data.columns:
-                            data[low] = data[cap]
-
-                    # Ensure Date column is datetime
-                    if 'Date' in data.columns:
-                        data["Date"] = pd.to_datetime(data["Date"])
-
-                    # Sort by date to ensure proper chronological order for indicators
-                    data = data.sort_values('Date').reset_index(drop=True)
-
-                    # Save to cache
-                    data.to_csv(data_file, index=False, encoding="utf-8")
+                # Keep lowercase aliases because Stockstats reads fields such
+                # as close and volume while reports also use title case.
+                required_cols_map = {
+                    "Open": "open",
+                    "High": "high",
+                    "Low": "low",
+                    "Close": "close",
+                    "Volume": "volume",
+                }
+                for capitalized, lowercase in required_cols_map.items():
+                    if capitalized in data.columns and lowercase not in data.columns:
+                        data[lowercase] = data[capitalized]
+                if "Date" in data.columns:
+                    data["Date"] = pd.to_datetime(data["Date"])
+                    data = data.sort_values("Date").drop_duplicates(subset=["Date"])
+                data = data.reset_index(drop=True)
+                data.to_csv(data_file, index=False, encoding="utf-8")
 
                 # Ensure we have sufficient data for technical indicators
                 if len(data) < 100:

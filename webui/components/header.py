@@ -1,6 +1,4 @@
-"""
-webui/components/header.py - Header component for the web UI.
-"""
+"""Header component for the TradingAgents research workspace."""
 
 import dash_bootstrap_components as dbc
 from dash import html
@@ -9,26 +7,43 @@ from webui.components.api_config_modal import create_config_button
 
 
 def create_header():
-    """Create the header component for the web UI."""
-    return dbc.Card(
-        dbc.CardBody([
-            dbc.Row([
-                # Left side spacer for balance
-                dbc.Col(width=2),
-                
-                # Center title
-                dbc.Col([
-                    html.H1(
-                        "AlpacaTradingAgent - Auditable Multi-Agent Trading Research Framework",
-                        className="text-center mb-0"
-                    )
-                ], width=8, className="d-flex align-items-center justify-content-center"),
-                
-                # Right side with Config APIs button
-                dbc.Col([
-                    create_config_button()
-                ], width=2, className="d-flex align-items-center justify-content-end"),
-            ], className="align-items-center")
-        ]),
-        className="mb-4"
-    ) 
+    """Create the compact application header."""
+    return html.Header(
+        dbc.Row(
+            [
+                dbc.Col(
+                    html.Div(
+                        [
+                            html.Div(
+                                html.I(className="fa-solid fa-chart-line"),
+                                className="app-brand-mark",
+                                **{"aria-hidden": "true"},
+                            ),
+                            html.Div(
+                                [
+                                    html.Div("ALPACA / RESEARCH WORKSPACE", className="app-eyebrow"),
+                                    html.H1("Trading desk", className="app-title"),
+                                    html.P(
+                                        "Multi-agent market research and execution controls",
+                                        className="app-subtitle",
+                                    ),
+                                ],
+                                className="app-heading-copy",
+                            ),
+                        ],
+                        className="app-heading-group",
+                    ),
+                    xs=12,
+                    md=True,
+                ),
+                dbc.Col(
+                    create_config_button(),
+                    xs=12,
+                    md="auto",
+                    className="app-header-actions",
+                ),
+            ],
+            className="align-items-center g-3",
+        ),
+        className="app-header",
+    )

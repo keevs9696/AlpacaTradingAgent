@@ -23,6 +23,7 @@ from alpaca.trading.requests import (
 from alpaca.trading.enums import AssetClass, AssetStatus, OrderClass, OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.common.enums import Sort
 from .config import get_api_key, get_alpaca_use_paper, get_config
+from .market_data_cache import load_bars, normalize_timestamp, ranges_to_fetch, store_bars
 from .ticker_utils import TickerUtils
 # Imported lazily inside execute_trade_intent: a module-level import would
 # create a circular import (dataflows -> agents -> dataflows.interface).
@@ -213,7 +214,15 @@ def get_alpaca_trading_client() -> TradingClient:
     if not api_key or not api_secret:
         raise ValueError("Alpaca API key or secret not found. Please set ALPACA_API_KEY and ALPACA_SECRET_KEY.")
     use_paper = str(get_alpaca_use_paper() or "True").strip().lower() not in ("false", "0", "no")
-    return TradingClient(api_key, api_secret, paper=use_paper)
+    url_override = os.getenv("ALPACA_BASE_URL", "").strip().rstrip("/")
+    if url_override.lower().endswith("/v2"):
+        url_override = url_override[:-3]
+    return TradingClient(
+        api_key,
+        api_secret,
+        paper=use_paper,
+        url_override=url_override or None,
+    )
 
 
 def _parse_timeframe(tf: Union[str, TimeFrame]) -> TimeFrame:
@@ -433,69 +442,114 @@ class AlpacaUtils:
         Returns:
             pandas DataFrame with columns ['timestamp','open','high','low','close','volume']
         """
-        # normalize dates
-        start = pd.to_datetime(start_date)
-        end = pd.to_datetime(end_date) + timedelta(days=1) if end_date else None
-
+        # The API's end date is inclusive in this public helper. Store and query
+        # it as a half-open UTC interval so adjacent requests do not overlap.
+        start = normalize_timestamp(start_date)
         tf = _parse_timeframe(timeframe)
-
-        try:
-            # choose client
-            is_crypto = "/" in symbol
-            client = get_alpaca_crypto_client() if is_crypto else get_alpaca_stock_client()
-
-            # build request params; always use a list for symbol_or_symbols
-            params = (
-                CryptoBarsRequest(
-                    symbol_or_symbols=[symbol],
-                    timeframe=tf,
-                    start=start,
-                    end=end,
-                    feed=feed
-                ) if is_crypto else
-                StockBarsRequest(
-                    symbol_or_symbols=[symbol],
-                    timeframe=tf,
-                    start=start,
-                    end=end,
-                    feed=feed
-                )
-            )
-            bars = client.get_crypto_bars(params) if is_crypto else client.get_stock_bars(params)
-            # convert to DataFrame via the .df property
-            df = bars.df.reset_index()  # multi-index ['symbol','timestamp']
-            
-            # filter for our symbol (in case of list) - only if symbol column exists
-            if "symbol" in df.columns:
-                df = df[df["symbol"] == symbol].drop(columns="symbol")
+        timeframe_key = str(timeframe)
+        if end_date:
+            end = normalize_timestamp(end_date) + pd.Timedelta(days=1)
+        else:
+            now = normalize_timestamp(datetime.now().astimezone())
+            time_key = timeframe_key.lower()
+            if "day" in time_key or time_key.endswith("d"):
+                end = now.normalize() + pd.Timedelta(days=1)
+            elif "hour" in time_key or time_key.endswith("h"):
+                end = now.floor("h") + pd.Timedelta(hours=1)
             else:
-                # If no symbol column, assume all data is for the requested symbol
-                pass
+                end = now.floor("min") + pd.Timedelta(minutes=1)
+        is_crypto = "/" in symbol
+        requested_ranges = ranges_to_fetch(
+            symbol, timeframe_key, feed, start, end
+        )
+        fetch_errors = []
+        empty_response = False
 
-            # Alpaca can include a bar at the exact end boundary. The public
-            # date range includes end_date, but must exclude the next day's
-            # midnight bar (especially for daily crypto data).
-            if end is not None and "timestamp" in df.columns:
-                cutoff = pd.Timestamp(end)
-                cutoff = cutoff.tz_localize("UTC") if cutoff.tzinfo is None else cutoff.tz_convert("UTC")
-                df = df.loc[pd.to_datetime(df["timestamp"], utc=True) < cutoff].reset_index(drop=True)
-                
-            if df.empty:
-                raise ValueError("empty Alpaca bar response")
+        for range_start, range_end in requested_ranges:
+            try:
+                client = get_alpaca_crypto_client() if is_crypto else get_alpaca_stock_client()
+                params = (
+                    CryptoBarsRequest(
+                        symbol_or_symbols=[symbol],
+                        timeframe=tf,
+                        start=range_start,
+                        end=range_end,
+                        feed=feed,
+                    ) if is_crypto else
+                    StockBarsRequest(
+                        symbol_or_symbols=[symbol],
+                        timeframe=tf,
+                        start=range_start,
+                        end=range_end,
+                        feed=feed,
+                    )
+                )
+                bars = client.get_crypto_bars(params) if is_crypto else client.get_stock_bars(params)
+                fetched = bars.df.reset_index()
+                if "symbol" in fetched.columns:
+                    fetched = fetched[fetched["symbol"] == symbol].drop(columns="symbol")
+                if "timestamp" in fetched.columns:
+                    fetched["timestamp"] = pd.to_datetime(fetched["timestamp"], utc=True)
+                    fetched = fetched.loc[
+                        (fetched["timestamp"] >= range_start)
+                        & (fetched["timestamp"] < range_end)
+                    ].reset_index(drop=True)
+                if fetched.empty:
+                    empty_response = True
+                store_bars(
+                    symbol,
+                    timeframe_key,
+                    feed,
+                    range_start,
+                    range_end,
+                    fetched,
+                )
+            except Exception as exc:
+                fetch_errors.append(exc)
+                print(f"Error fetching Alpaca bars for {symbol}: {exc}")
 
-            if save_path:
-                df.to_csv(save_path, index=False, encoding="utf-8")
-            return df
+        data = load_bars(symbol, timeframe_key, feed, start, end)
+        if data.empty and (fetch_errors or empty_response):
+            fallback_end = end if end_date else None
+            for error in fetch_errors:
+                if not _is_supported_data_fallback_error(error):
+                    continue
+                fallback = _yfinance_fallback_data(symbol, start, fallback_end, timeframe)
+                if not fallback.empty:
+                    data = fallback
+                    break
+            if data.empty and not fetch_errors and empty_response:
+                data = _yfinance_fallback_data(symbol, start, fallback_end, timeframe)
 
-        except Exception as e:
-            if _is_supported_data_fallback_error(e):
-                fallback_df = _yfinance_fallback_data(symbol, start, end, timeframe)
-                if not fallback_df.empty:
-                    if save_path:
-                        fallback_df.to_csv(save_path, index=False, encoding="utf-8")
-                    return fallback_df
-            print(f"Error fetching data for {symbol}: {e}")
-            return pd.DataFrame()
+        if fetch_errors and data.empty:
+            print(f"No cached bars available for {symbol} after Alpaca request failure.")
+        if save_path and not data.empty:
+            data.to_csv(save_path, index=False, encoding="utf-8")
+        return data
+
+    @staticmethod
+    def seed_stock_data_cache(
+        symbol: str,
+        data: pd.DataFrame,
+        start_date: Union[str, datetime],
+        end_date: Union[str, datetime],
+        timeframe: Union[str, TimeFrame] = "1Day",
+        feed: DataFeed = DataFeed.IEX,
+        fetched_at: Optional[float] = None,
+    ) -> None:
+        """Seed SQLite from a legacy OHLCV CSV, preserving its file age."""
+        start = normalize_timestamp(start_date)
+        end = normalize_timestamp(end_date) + pd.Timedelta(days=1)
+        store_bars(
+            symbol,
+            str(timeframe),
+            feed,
+            start,
+            end,
+            data,
+            fetched_at=fetched_at,
+            overwrite=False,
+        )
 
     @staticmethod
     def get_latest_quote(symbol: str) -> dict:

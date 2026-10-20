@@ -222,7 +222,7 @@ def _llm_param_controls(role, default_model):
     )
 
 
-def _model_panel(role, title, icon, default_model):
+def _model_panel(role, title, icon, default_model, custom_model):
     prefix = f"{role}-llm"
     return html.Div(
         [
@@ -242,7 +242,7 @@ def _model_panel(role, title, icon, default_model):
                     ),
                     dbc.Select(
                         id=prefix,
-                        options=get_model_options_for_provider("openai", role),
+                        options=get_model_options_for_provider("openrouter", role),
                         value=default_model,
                         className="config-select mt-3",
                     ),
@@ -253,7 +253,7 @@ def _model_panel(role, title, icon, default_model):
                                 id=f"{prefix}-custom-model",
                                 type="text",
                                 placeholder="provider/model-name",
-                                value="",
+                                value=custom_model,
                                 className="config-input",
                             ),
                             "keyboard",
@@ -482,7 +482,7 @@ def _model_setup():
                         dbc.Select(
                             id="llm-provider",
                             options=get_llm_provider_options(),
-                            value="openai",
+                            value="openrouter",
                             className="config-select",
                         ),
                         "network-wired",
@@ -600,8 +600,14 @@ def _model_setup():
             ),
             html.Div(
                 [
-                    _model_panel("quick", "Quick thinker", "bolt", "gpt-5.4-nano"),
-                    _model_panel("deep", "Deep thinker", "brain", "gpt-5.4-mini"),
+                    _model_panel(
+                        "quick", "Quick thinker", "bolt", "custom",
+                        "deepseek/deepseek-v4.1-flash-1017",
+                    ),
+                    _model_panel(
+                        "deep", "Deep thinker", "brain", "custom",
+                        "anthropic/claude-haiku-5.5",
+                    ),
                 ],
                 className="model-grid",
             ),

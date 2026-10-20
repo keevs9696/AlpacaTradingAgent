@@ -170,15 +170,15 @@ def create_main_layout():
             create_safety_panel(),
             alpaca_account_card,
             dbc.Row([
-                dbc.Col(config_card, md=6),
+                dbc.Col(config_card, xs=12, xl=5),
                 dbc.Col([
                     chart_card,
-                    html.Div(className="mb-3"),  # Add some spacing
+                    html.Div(className="workspace-gap"),
                     status_card,
-                    html.Div(className="mb-3"),  # Add some spacing
+                    html.Div(className="workspace-gap"),
                     decision_card,
-                ], md=6)
-            ]),
+                ], xs=12, xl=7, className="analysis-workspace")
+            ], className="dashboard-main-row"),
             reports_card,
             create_backtest_panel(),
             create_cost_panel(),
@@ -186,7 +186,7 @@ def create_main_layout():
             create_footer(),
         ],
         fluid=True,
-        className="p-4",
+        className="dashboard-shell",
         style={"backgroundColor": COLORS["background"]}
     )
     
